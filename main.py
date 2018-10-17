@@ -11,6 +11,7 @@ import os
 SCOPES = 'https://www.googleapis.com/auth/drive'
 REKO_URL = 'http://reko.utem.cl/aula/'
 PAUTAS_UTEM_ID = '1c7Z6kDvuP_H3XotiyQMW8wE76Kwq9LjH'
+FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder'
 H = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2228.0 Safari/537.36',
     'Referer': 'http://reko.utem.cl/portal/'
@@ -47,8 +48,7 @@ def get_archivos(uri, s):
     anchors = soup.find('div', attrs={'class':'contenido'}).find_all('a', href=True)
     return anchors
 
-def descargar_archivo(uri, s):
-    nombre = uri.split('filename=')[-1]
+def descargar_archivo(nombre, uri, s):
     print("Descargando " + nombre + " desde Reko...")
     r = s.get(REKO_URL + uri, headers=H, stream=True)
     with open('temp/' + nombre, 'wb') as f:
@@ -81,6 +81,24 @@ def crear_carpeta(service, nombre, parents):
                                         fields='id').execute()
     return file.get('id')
 
+def buscar_carpeta(service, nombre, parents):
+    q = "mimeType='%s' and name='%s' and '%s' in parents" % (FOLDER_MIME_TYPE, nombre, parents)
+    response = service.files().list(q=q,
+                                    spaces='drive',
+                                    fields='nextPageToken, files(id, name)').execute()
+    for file in response.get('files', []):
+        return file.get('id')
+    return None
+
+def buscar_archivo(service, nombre, parents):
+    q = "name='%s' and '%s' in parents" % (nombre, parents)
+    response = service.files().list(q=q,
+                                    spaces='drive',
+                                    fields='nextPageToken, files(id, name)').execute()
+    for file in response.get('files', []):
+        return file.get('id')
+    return None
+
 def main():
     store = file.Storage('token.json')
     creds = store.get()
@@ -95,22 +113,32 @@ def main():
         for asignatura in asignaturas:
             a = asignatura.find('a', href=True)
             nombre = a.text
-            id_asignatura = crear_carpeta(service, nombre, [PAUTAS_UTEM_ID])
             href = a['href']
+            codigo = href.replace('asignaturas.php?cualasig=', '').replace('&show=t', '')
+            carpeta = codigo + ' - ' + nombre
+            id_asignatura = buscar_carpeta(service, carpeta, PAUTAS_UTEM_ID)
+            if id_asignatura is None:
+                id_asignatura = crear_carpeta(service, carpeta, [PAUTAS_UTEM_ID])
             contenidos = get_contenidos(href, s)
             if contenidos:
                 for contenido in contenidos:
                     a = contenido.find('a', href=True)
                     nombre = a.text
-                    id_contenido = crear_carpeta(service, nombre, [id_asignatura])
                     href = a['href']
+                    carpeta = href.split('llaveid=')[-1] + ' - ' + nombre
+                    id_contenido = buscar_carpeta(service, carpeta, id_asignatura)
+                    if id_contenido is None:
+                        id_contenido = crear_carpeta(service, carpeta, [id_asignatura])
+                    
                     archivos = get_archivos(href, s)
                     for archivo in archivos:
                         href = archivo['href']
                         if href.startswith("download.php?"):
-                            nombre = descargar_archivo(href, s)
-                            subir_archivo(service, nombre, [id_contenido])
-                            eliminar_archivo(nombre)
+                            nombre = href.split('filename=')[-1]
+                            if buscar_archivo(service, nombre, id_contenido) is None:
+                                descargar_archivo(nombre, href, s)
+                                subir_archivo(service, nombre, [id_contenido])
+                                eliminar_archivo(nombre)
 
 if __name__ == '__main__':
     main()
